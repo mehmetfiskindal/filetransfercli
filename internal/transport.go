@@ -3,6 +3,7 @@ package internal
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/gob"
 	"fmt"
@@ -24,7 +25,23 @@ type conn struct {
 }
 
 func newConn(c net.Conn) *conn {
+	setNoDelay(c)
 	return &conn{c: c, br: bufio.NewReader(c)}
+}
+
+// setNoDelay disables Nagle's algorithm on the underlying TCP connection.
+// Without it, the small 5-byte frame header written before each chunk payload
+// triggers a Nagle/delayed-ACK stall that caps throughput to a few MiB/s.
+func setNoDelay(c net.Conn) {
+	var tc *net.TCPConn
+	if tlsc, ok := c.(*tls.Conn); ok {
+		tc, _ = tlsc.NetConn().(*net.TCPConn)
+	} else {
+		tc, _ = c.(*net.TCPConn)
+	}
+	if tc != nil {
+		_ = tc.SetNoDelay(true)
+	}
 }
 
 func (c *conn) Close() error { return c.c.Close() }
