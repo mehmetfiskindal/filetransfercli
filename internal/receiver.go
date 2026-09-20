@@ -2,8 +2,10 @@ package internal
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
+	"hash"
 	"io"
 	"net"
 	"os"
@@ -54,20 +56,22 @@ func handleConn(raw net.Conn, outDir string) error {
 		return err
 	}
 
+	// Phase one is a stat per destination: report what is already on disk so
+	// the sender only hashes the files that could actually resume.
 	resumes := make([]ResumeInfo, len(hello.Files))
+	needQuery := false
 	for i, fi := range hello.Files {
 		dest := filepath.Join(outDir, filepath.FromSlash(fi.Path))
 		if !withinDir(outDir, dest) {
 			return fmt.Errorf("refusing unsafe path %q", fi.Path)
 		}
-		off, complete, err := matchResume(dest, fi)
-		if err != nil {
-			return err
+		have := int64(0)
+		if st, err := os.Stat(dest); err == nil && !st.IsDir() {
+			have = st.Size()
 		}
-		if complete {
-			resumes[i] = ResumeInfo{Path: fi.Path, Offset: -1}
-		} else {
-			resumes[i] = ResumeInfo{Path: fi.Path, Offset: off}
+		resumes[i] = ResumeInfo{Path: fi.Path, Have: have}
+		if have > 0 {
+			needQuery = true
 		}
 	}
 
@@ -75,11 +79,48 @@ func handleConn(raw net.Conn, outDir string) error {
 		return err
 	}
 
+	// Phase two runs only when something might resume.
+	offsets := make([]int64, len(hello.Files))
+	if needQuery {
+		var batch ResumeQueryBatch
+		if err := c.recvMsg(&batch); err != nil {
+			return err
+		}
+		answers := make([]ResumeAnswer, len(batch.Queries))
+		resolved := make(map[string]int64, len(batch.Queries))
+		for j, q := range batch.Queries {
+			dest := filepath.Join(outDir, filepath.FromSlash(q.Path))
+			if !withinDir(outDir, dest) {
+				return fmt.Errorf("refusing unsafe path %q", q.Path)
+			}
+			off, complete, err := matchResume(dest, q)
+			if err != nil {
+				return err
+			}
+			if complete {
+				off = -1
+			}
+			answers[j] = ResumeAnswer{Path: q.Path, Offset: off}
+			resolved[q.Path] = off
+		}
+		if err := c.sendMsg(ResumeAnswerBatch{Answers: answers}); err != nil {
+			return err
+		}
+		for i, fi := range hello.Files {
+			if off, ok := resolved[fi.Path]; ok {
+				offsets[i] = off
+			}
+		}
+	}
+
+	// One buffer serves every file on this connection, so a directory of
+	// thousands of files does not churn chunk-sized allocations.
+	buf := make([]byte, ChunkSize)
 	for i, fi := range hello.Files {
-		if resumes[i].Offset < 0 {
+		if offsets[i] < 0 {
 			continue
 		}
-		if err := receiveFile(c, outDir, fi, resumes[i].Offset); err != nil {
+		if err := receiveFile(c, outDir, fi, offsets[i], buf); err != nil {
 			return err
 		}
 	}
@@ -91,7 +132,7 @@ func handleConn(raw net.Conn, outDir string) error {
 	return c.sendMsg(DoneAck{})
 }
 
-func receiveFile(c *conn, outDir string, fi FileInfo, offset int64) error {
+func receiveFile(c *conn, outDir string, fi FileInfo, offset int64, buf []byte) error {
 	var start FileStart
 	if err := c.recvMsg(&start); err != nil {
 		return err
@@ -102,68 +143,66 @@ func receiveFile(c *conn, outDir string, fi FileInfo, offset int64) error {
 		return err
 	}
 
-	f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	if err := f.Truncate(offset); err != nil {
-		f.Close()
-		return err
-	}
-	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		f.Close()
-		return err
-	}
-
-	var received int64
-	for {
-		typ, payload, err := c.recv()
-		if err != nil {
-			f.Close()
-			return err
-		}
-		if typ == frameData {
-			if _, err := f.Write(payload); err != nil {
-				f.Close()
-				return err
-			}
-			received += int64(len(payload))
-			continue
-		}
-		if typ != frameControl {
-			f.Close()
-			return fmt.Errorf("unexpected frame type %d", typ)
-		}
-		var fd FileDone
-		if err := decodeMsg(payload, &fd); err != nil {
-			f.Close()
-			return err
-		}
-		if err := f.Close(); err != nil {
-			return err
-		}
-		if err := verifyFile(dest, fi.SHA256); err != nil {
-			return err
-		}
-		fmt.Printf("received %s (%s)\n", fi.Path, humanBytes(received))
-		return nil
-	}
-}
-
-func verifyFile(path string, want []byte) error {
-	f, err := os.Open(path)
+	f, err := os.OpenFile(dest, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	got, err := hashFile(f)
+
+	if err := f.Truncate(offset); err != nil {
+		return err
+	}
+
+	// Hash as the bytes land instead of re-reading the finished file. On a
+	// resumed transfer the retained prefix is folded in first so the digest
+	// still covers the whole file.
+	hasher := sha256.New()
+	if err := hashPrefixInto(f, offset, hasher); err != nil {
+		return err
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return err
+	}
+
+	received, err := drainFile(c, f, hasher, buf)
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(got, want) {
-		return fmt.Errorf("checksum mismatch for %s", path)
+
+	if err := f.Close(); err != nil {
+		return err
 	}
+	if !bytes.Equal(hasher.Sum(nil), received.SHA256) {
+		return fmt.Errorf("checksum mismatch for %s", dest)
+	}
+	fmt.Printf("received %s (%s)\n", fi.Path, humanBytes(received.Bytes))
 	return nil
+}
+
+// drainFile writes incoming data frames to f until the sender's FileDone
+// arrives, returning that message.
+func drainFile(c *conn, f *os.File, hasher hash.Hash, buf []byte) (FileDone, error) {
+	for {
+		typ, payload, err := c.recvInto(buf)
+		if err != nil {
+			return FileDone{}, err
+		}
+		switch typ {
+		case frameData:
+			if _, err := f.Write(payload); err != nil {
+				return FileDone{}, err
+			}
+			hasher.Write(payload)
+		case frameControl:
+			var fd FileDone
+			if err := decodeMsg(payload, &fd); err != nil {
+				return FileDone{}, err
+			}
+			return fd, nil
+		default:
+			return FileDone{}, fmt.Errorf("unexpected frame type %d", typ)
+		}
+	}
 }
 
 // withinDir reports whether path is inside root (guards against path traversal).

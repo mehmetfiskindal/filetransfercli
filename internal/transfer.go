@@ -3,6 +3,7 @@ package internal
 import (
 	"bytes"
 	"crypto/sha256"
+	"hash"
 	"io"
 	"os"
 )
@@ -11,50 +12,62 @@ import (
 // fixed-size chunks so resume can restart at a chunk boundary.
 const ChunkSize int64 = 1 << 20 // 1 MiB
 
-// scanFile computes the metadata (size, modtime, full and per-chunk SHA-256)
-// used to drive transfer and resume.
-func scanFile(path string) (*FileInfo, error) {
-	f, err := os.Open(path)
+// statFile collects the metadata the handshake needs. It deliberately does not
+// hash: a fresh transfer never reads these bytes twice, and the walk over a
+// large directory stays a stat walk.
+func statFile(path string) (FileInfo, error) {
+	st, err := os.Stat(path)
 	if err != nil {
-		return nil, err
+		return FileInfo{}, err
 	}
-	defer f.Close()
-
-	st, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-
-	fi := &FileInfo{
+	return FileInfo{
 		Path:    path,
 		Size:    st.Size(),
 		ModTime: st.ModTime().Unix(),
+	}, nil
+}
+
+// fileHashes holds one file's whole-file and per-chunk digests.
+type fileHashes struct {
+	Full   []byte
+	Chunks [][]byte
+}
+
+// hashFileChunks reads path once and returns both digest forms. Only called
+// for files the receiver already holds bytes for, so the cost is paid on
+// resume rather than on every send.
+func hashFileChunks(path string) (fileHashes, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return fileHashes{}, err
 	}
+	defer f.Close()
 
 	full := sha256.New()
 	buf := make([]byte, ChunkSize)
+	var out fileHashes
 	for {
 		n, rerr := io.ReadFull(f, buf)
 		if n > 0 {
 			full.Write(buf[:n])
 			sum := sha256.Sum256(buf[:n])
-			fi.Chunks = append(fi.Chunks, sum[:])
+			out.Chunks = append(out.Chunks, sum[:])
 		}
 		if rerr == io.EOF || rerr == io.ErrUnexpectedEOF {
 			break
 		}
 		if rerr != nil {
-			return nil, rerr
+			return fileHashes{}, rerr
 		}
 	}
-	fi.SHA256 = full.Sum(nil)
-	return fi, nil
+	out.Full = full.Sum(nil)
+	return out, nil
 }
 
-// matchResume inspects an existing file at path and returns the byte offset
-// from which the transfer should resume. complete is true when the file is
-// already fully present and correct (the sender can skip it).
-func matchResume(path string, fi FileInfo) (offset int64, complete bool, err error) {
+// matchResume inspects the file at path against a sender's hashes and returns
+// the byte offset from which the transfer should resume. complete is true when
+// the file is already fully present and correct.
+func matchResume(path string, q ResumeQuery) (offset int64, complete bool, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -70,11 +83,11 @@ func matchResume(path string, fi FileInfo) (offset int64, complete bool, err err
 	}
 
 	// Fast path: identical full file.
-	if st.Size() == fi.Size {
-		if full, herr := hashFile(f); herr == nil && bytes.Equal(full, fi.SHA256) {
-			return fi.Size, true, nil
+	if st.Size() == q.Size {
+		if full, herr := hashFile(f); herr == nil && bytes.Equal(full, q.SHA256) {
+			return q.Size, true, nil
 		}
-		if fi.Size == 0 {
+		if q.Size == 0 {
 			return 0, true, nil
 		}
 	}
@@ -85,7 +98,7 @@ func matchResume(path string, fi FileInfo) (offset int64, complete bool, err err
 	}
 	buf := make([]byte, ChunkSize)
 	offset = 0
-	for i := 0; i < len(fi.Chunks); i++ {
+	for i := 0; i < len(q.Chunks); i++ {
 		n, rerr := io.ReadFull(f, buf)
 		if n == 0 {
 			break
@@ -94,7 +107,7 @@ func matchResume(path string, fi FileInfo) (offset int64, complete bool, err err
 			return 0, false, rerr
 		}
 		got := sha256.Sum256(buf[:n])
-		if !bytes.Equal(got[:], fi.Chunks[i]) {
+		if !bytes.Equal(got[:], q.Chunks[i]) {
 			break
 		}
 		offset += int64(n)
@@ -103,7 +116,7 @@ func matchResume(path string, fi FileInfo) (offset int64, complete bool, err err
 		}
 	}
 
-	if offset == fi.Size {
+	if offset == q.Size {
 		return offset, true, nil
 	}
 	return offset, false, nil
@@ -118,4 +131,22 @@ func hashFile(f *os.File) ([]byte, error) {
 		return nil, err
 	}
 	return h.Sum(nil), nil
+}
+
+// hashPrefixInto feeds the first n bytes of f into h.
+//
+// Needed on both sides of a resumed transfer: FileDone's digest covers the
+// whole file, but a resumed stream only carries the tail, so the already
+// present prefix has to be folded in to reach the same value.
+func hashPrefixInto(f *os.File, n int64, h hash.Hash) error {
+	if n <= 0 {
+		return nil
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	if _, err := io.CopyN(h, f, n); err != nil {
+		return err
+	}
+	return nil
 }

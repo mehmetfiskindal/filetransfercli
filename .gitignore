@@ -1,2 +1,8 @@
 # release binaries
 /dist/
+
+# scratch dirs used by the bridge walkthrough in README.md
+.demo-root/
+.demo-out/
+
+.DS_Store

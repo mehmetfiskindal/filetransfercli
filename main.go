@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"filetransfer/internal"
 )
@@ -18,6 +19,8 @@ func main() {
 		sendCmd(os.Args[2:])
 	case "receive":
 		receiveCmd(os.Args[2:])
+	case "bridge":
+		bridgeCmd(os.Args[2:])
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -69,6 +72,45 @@ func receiveCmd(args []string) {
 	}
 }
 
+// peerList collects repeated -peer flags.
+type peerList []string
+
+func (p *peerList) String() string { return strings.Join(*p, ",") }
+
+func (p *peerList) Set(value string) error {
+	*p = append(*p, value)
+	return nil
+}
+
+func bridgeCmd(args []string) {
+	fs := flag.NewFlagSet("bridge", flag.ExitOnError)
+	addr := fs.String("addr", ":8080", "HTTP listen address for the app")
+	root := fs.String("root", ".", "directory the app may send from")
+	www := fs.String("www", "", "directory of the built web app to serve at /")
+	secretFlag := fs.String("secret", "", "default shared secret")
+	var peers peerList
+	fs.Var(&peers, "peer", "receiver address to suggest in the app (repeatable)")
+	fs.Usage = func() { usage() }
+	fs.Parse(args)
+
+	// The secret is optional here: the app can supply its own per transfer, so
+	// a bridge may run without one on disk or in a process list.
+	var secret []byte
+	if s, err := resolveSecret(*secretFlag); err == nil {
+		secret = s
+	}
+
+	if err := internal.Bridge(internal.BridgeConfig{
+		Addr:    *addr,
+		Root:    *root,
+		WebRoot: *www,
+		Peers:   peers,
+		Secret:  secret,
+	}); err != nil {
+		fatal(err)
+	}
+}
+
 func resolveSecret(flagValue string) ([]byte, error) {
 	if flagValue != "" {
 		return []byte(flagValue), nil
@@ -90,8 +132,13 @@ func usage() {
 Usage:
   filetransfer receive -addr :8443 [-out DIR] -secret SECRET
   filetransfer send -to HOST:PORT -secret SECRET PATH...
+  filetransfer bridge [-addr :8080] [-root DIR] [-www DIR] [-peer HOST:PORT]
 
 The secret may be provided with -secret or the FILETRANSFER_SECRET env var.
 Both sides must use the same secret.
+
+bridge serves the mobile app's control channel: the app picks files under
+-root and the bridge runs the transfer to -peer. File bytes never pass
+through the bridge.
 `)
 }

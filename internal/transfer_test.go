@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestMatchResume(t *testing.T) {
@@ -16,12 +17,22 @@ func TestMatchResume(t *testing.T) {
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	fi, err := scanFile(path)
+	fi, err := statFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	hashes, err := hashFileChunks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := ResumeQuery{
+		Path:   fi.Path,
+		Size:   fi.Size,
+		SHA256: hashes.Full,
+		Chunks: hashes.Chunks,
+	}
 
-	if off, complete, err := matchResume(path, *fi); err != nil || !complete || off != fi.Size {
+	if off, complete, err := matchResume(path, query); err != nil || !complete || off != fi.Size {
 		t.Fatalf("full file: off=%d complete=%v err=%v", off, complete, err)
 	}
 
@@ -30,7 +41,7 @@ func TestMatchResume(t *testing.T) {
 	if err := os.WriteFile(path, partial, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	off, complete, err := matchResume(path, *fi)
+	off, complete, err := matchResume(path, query)
 	if err != nil || complete {
 		t.Fatalf("partial file: off=%d complete=%v err=%v", off, complete, err)
 	}
@@ -182,28 +193,83 @@ func TestResumeAfterTruncate(t *testing.T) {
 		return ch
 	}
 
-	// First transfer completes fully.
+	// First transfer completes fully and moves every byte.
 	srv := serve()
-	if err := Send(SendConfig{To: ln.Addr().String(), Secret: secret, Paths: []string{srcPath}}); err != nil {
+	var first countingObserver
+	if err := Send(SendConfig{
+		To: ln.Addr().String(), Secret: secret, Paths: []string{srcPath},
+		Observer: &first, Quiet: true,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-srv; err != nil {
 		t.Fatal(err)
 	}
 	assertFile(t, filepath.Join(dst, "big.bin"), big)
+	if first.bytes != int64(len(big)) {
+		t.Fatalf("fresh send moved %d bytes, want %d", first.bytes, len(big))
+	}
 
-	// Truncate the destination to a chunk-aligned prefix + a few bytes.
-	if err := os.Truncate(filepath.Join(dst, "big.bin"), ChunkSize+7); err != nil {
+	// Truncate the destination to a chunk-aligned prefix + a few bytes. The
+	// resend must carry only the missing tail, not the whole file: a transfer
+	// that silently restarts from zero still ends with correct bytes on disk,
+	// so byte accounting is the only thing that proves resume works.
+	const kept = ChunkSize + 7
+	if err := os.Truncate(filepath.Join(dst, "big.bin"), kept); err != nil {
 		t.Fatal(err)
 	}
 	srv = serve()
-	if err := Send(SendConfig{To: ln.Addr().String(), Secret: secret, Paths: []string{srcPath}}); err != nil {
+	var partial countingObserver
+	if err := Send(SendConfig{
+		To: ln.Addr().String(), Secret: secret, Paths: []string{srcPath},
+		Observer: &partial, Quiet: true,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-srv; err != nil {
 		t.Fatal(err)
 	}
 	assertFile(t, filepath.Join(dst, "big.bin"), big)
+	// The retained tail past the last chunk boundary is discarded, so resume
+	// restarts at the boundary below `kept`.
+	wantResume := int64(kept - kept%ChunkSize)
+	if want := int64(len(big)) - wantResume; partial.bytes != want {
+		t.Fatalf("resumed send moved %d bytes, want %d", partial.bytes, want)
+	}
+
+	// Sending an already-complete file must move nothing and skip the file.
+	srv = serve()
+	var noop countingObserver
+	if err := Send(SendConfig{
+		To: ln.Addr().String(), Secret: secret, Paths: []string{srcPath},
+		Observer: &noop, Quiet: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-srv; err != nil {
+		t.Fatal(err)
+	}
+	if noop.bytes != 0 || noop.files != 0 {
+		t.Fatalf("resend of complete file moved %d bytes in %d files, want 0/0", noop.bytes, noop.files)
+	}
+	if noop.plan[0].Resume != -1 {
+		t.Fatalf("complete file planned with resume %d, want -1 (skip)", noop.plan[0].Resume)
+	}
+}
+
+// countingObserver records what a transfer actually carried.
+type countingObserver struct {
+	plan  []PlanItem
+	files int
+	bytes int64
+}
+
+func (o *countingObserver) Plan(items []PlanItem)          { o.plan = items }
+func (o *countingObserver) FileBegin(string, int64, int64) {}
+func (o *countingObserver) FileProgress(string, int64)     {}
+func (o *countingObserver) FileEnd(string, error)          {}
+func (o *countingObserver) Finish(files int, b int64, _ time.Duration) {
+	o.files, o.bytes = files, b
 }
 
 func assertFile(t *testing.T, path string, want []byte) {

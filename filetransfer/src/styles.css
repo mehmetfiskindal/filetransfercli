@@ -1,0 +1,379 @@
+@font-face {
+  font-family: 'Inter';
+  src: url('../assets/fonts/Inter-Regular.ttf');
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background-color: #0e1116;
+  color: #f8fafc;
+  font-family: 'Inter';
+  font-size: 15px;
+}
+
+/* ---------------------------------------------------------------- top bar */
+
+.topbar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  height: 56px;
+  padding: 0 14px;
+  background-color: #141a21;
+  border-bottom-width: 1px;
+  border-color: #1f2a35;
+}
+
+.brand-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 2px;
+}
+
+.brand {
+  font-size: 17px;
+  color: #f8fafc;
+}
+
+.host {
+  font-size: 11px;
+  color: #7c8a9a;
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 5px;
+  background-color: #475569;
+}
+
+.dot-online {
+  background-color: #2dd4bf;
+}
+
+.dot-connecting {
+  background-color: #fbbf24;
+}
+
+.dot-offline {
+  background-color: #ef4444;
+}
+
+/* ---------------------------------------------------------------- buttons */
+
+.btn {
+  height: 38px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border-width: 1px;
+  border-color: #2b3644;
+  background-color: #1b232c;
+  color: #e2e8f0;
+  font-family: 'Inter';
+  font-size: 14px;
+  text-align: center;
+}
+
+.btn-ghost {
+  height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
+  background-color: #10161d;
+}
+
+.btn-primary {
+  background-color: #0d9488;
+  border-color: #14b8a6;
+  color: #f0fdfa;
+}
+
+.btn-danger {
+  background-color: #7f1d1d;
+  border-color: #b91c1c;
+  color: #fef2f2;
+}
+
+/* ---------------------------------------------------------------- setup */
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+  background-color: #131a22;
+  border-bottom-width: 1px;
+  border-color: #1f2a35;
+}
+
+.field-label {
+  font-size: 11px;
+  color: #7c8a9a;
+}
+
+.field {
+  height: 38px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border-width: 1px;
+  border-color: #2b3644;
+  background-color: #0b0f14;
+  color: #f1f5f9;
+  font-family: 'Inter';
+  font-size: 14px;
+}
+
+/* ---------------------------------------------------------------- banners */
+
+.banner {
+  padding: 10px 14px;
+  font-size: 13px;
+}
+
+.banner-error {
+  background-color: #2a1416;
+  color: #fca5a5;
+}
+
+.banner-ok {
+  background-color: #0f2620;
+  color: #6ee7b7;
+}
+
+/* ---------------------------------------------------------------- list */
+
+.listwrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.section {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  padding: 0 14px;
+}
+
+.section-title {
+  font-size: 12px;
+  color: #7c8a9a;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  height: 60px;
+  padding: 0 14px;
+  border-bottom-width: 1px;
+  border-color: #161e26;
+}
+
+.row-on {
+  background-color: #12211f;
+}
+
+.check {
+  width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  border-width: 2px;
+  border-color: #3a4756;
+  background-color: #0e1116;
+}
+
+.check-on {
+  border-color: #2dd4bf;
+  background-color: #2dd4bf;
+}
+
+.row-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.row-name {
+  font-size: 15px;
+  color: #f1f5f9;
+}
+
+.row-path {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.row-size {
+  font-size: 13px;
+  color: #94a3b8;
+  text-align: right;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 28px 18px;
+}
+
+.empty-title {
+  font-size: 16px;
+  color: #cbd5e1;
+}
+
+.empty-copy {
+  font-size: 13px;
+  color: #64748b;
+}
+
+/* ---------------------------------------------------------------- transfers */
+
+.transfers {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.xfer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-bottom-width: 1px;
+  border-color: #161e26;
+}
+
+.xfer-head {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.xfer-name {
+  font-size: 14px;
+  color: #f1f5f9;
+}
+
+.xfer-state {
+  font-size: 11px;
+  color: #7c8a9a;
+}
+
+.state-running {
+  color: #2dd4bf;
+}
+
+.state-done {
+  color: #6ee7b7;
+}
+
+.state-failed {
+  color: #fca5a5;
+}
+
+.state-skipped {
+  color: #a1a1aa;
+}
+
+.state-hashing {
+  color: #fbbf24;
+}
+
+.xfer-foot {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.resumed {
+  font-size: 11px;
+  color: #fbbf24;
+}
+
+.row-error {
+  font-size: 11px;
+  color: #fca5a5;
+}
+
+/* ---------------------------------------------------------------- bars */
+
+.bar {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background-color: #1b232c;
+  overflow: hidden;
+}
+
+.bar-lg {
+  height: 8px;
+  border-radius: 4px;
+}
+
+.bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background-color: #2dd4bf;
+}
+
+/* ---------------------------------------------------------------- footer */
+
+.footer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  background-color: #141a21;
+  border-top-width: 1px;
+  border-color: #1f2a35;
+}
+
+.footer-stats {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.stat-main {
+  font-size: 14px;
+  color: #f1f5f9;
+}
+
+.muted {
+  font-size: 12px;
+  color: #7c8a9a;
+}
